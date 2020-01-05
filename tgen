@@ -1,0 +1,218 @@
+#!/usr/bin/python3
+"""This script """
+import argparse
+import os
+from os.path import realpath, dirname, basename
+import sys
+from copy import deepcopy
+#import logging
+import yaml
+import jinja2
+
+
+class TemplateHandler:
+    """ Generate content from templates """
+    def __init__(self, searchpath):
+        self.template_loader = jinja2.FileSystemLoader(searchpath=searchpath)
+        self.template_env = jinja2.Environment(
+            loader=self.template_loader,
+            trim_blocks=True,
+            lstrip_blocks=False)
+        self.template_file_list = []
+
+    def render(self, template_context_list):
+        """ render registered template  """
+        if not len(template_context_list) == len(self.template_file_list):
+            print("length of template_context_list != file_list")
+            exit(1)
+        output_text = ""
+        i = 0
+        for template_file in self.template_file_list:
+            template = self.template_env.get_template(template_file)
+            template_context = template_context_list[i]
+            output_text = output_text + template.render(template_context)
+            i = i + 1
+        return output_text
+
+    def register_template_file_list(self, file_list):
+        """ missing """
+        self.template_file_list = file_list
+
+class YamlDatabase:
+    """ Assemble dict database from yaml files """
+    def __init__(self, searchpath, content=None):
+        self.searchpath = searchpath
+        if content is None:
+            self.content = {}
+        else:
+            self.content = content
+
+    def get_content(self):
+        """ return content of yaml 'database'  """
+        return self.content
+
+    def merge_dict_recursive(self, config_target, config_source):
+        """ merge dictionary into target """
+        for key, value in config_source.items():
+            if isinstance(value, dict):
+                if key in config_target and isinstance(config_target[key], dict):
+                    value = self.merge_dict_recursive(config_target[key], value)
+            config_target[key] = value
+        return config_target
+
+    def merge_dict(self, config_source):
+        """ merge dictionary into target """
+        self.merge_dict_recursive(self.content, config_source)
+
+    def assemble_content(self, file_list):
+        """ load and join the content of yaml files """
+        for my_file in file_list:
+            fullpath = os.path.join(self.searchpath, my_file)
+            try:
+                file_descriptor = open(fullpath)
+                #print(fullpath)
+                tmp_content = yaml.safe_load(file_descriptor)
+                file_descriptor.close()
+                self.merge_dict(tmp_content)
+            except FileNotFoundError:
+                pass
+            except yaml.YAMLError as exc:
+                print(exc)
+                exit(1)
+
+def parse_cmdline(parser_name):
+    """ parse command line """
+    parser = argparse.ArgumentParser(parser_name)
+    parser.add_argument('template', metavar='template', nargs='+', help='template file')
+    parser.add_argument('--data-path', dest='data_path', help='path to data')
+    parser.add_argument('--data-includes', dest='data_includes',
+                        default="global,default", help='files which are included')
+    parser.add_argument('--root-key', dest='root_key',
+                        default='', help='root key in data files')
+    parser.add_argument('--extension', dest='extension',
+                        default='.yaml', help='extension for data files')
+    parser.add_argument('-o', '--output', dest='output_filename',
+                        default='', help='write output file')
+    parser.add_argument('-e', '--extra-vars', dest='extra_vars',
+                        default=[], action='append', help='extra variables')
+    parsed_args = parser.parse_args()
+    return parsed_args
+
+
+def assemble_template_context(data_path, template_file, content_defaults, parsed_args, extra_vars):
+    """ assemble content """
+    root_key = parsed_args.root_key
+    extension = parsed_args.extension
+
+    file_list = []
+    content = deepcopy(content_defaults)
+
+    yaml_database = YamlDatabase(searchpath=data_path, content=content)
+    yaml_name = derive_new_extension(template_file, extension)
+    file_list.append(yaml_name)
+    yaml_database.assemble_content(file_list)
+    # extra_vars are merged last, they are the "stronges" variables
+    yaml_database.merge_dict(extra_vars)
+    yaml_content = yaml_database.get_content()
+    if not root_key == '':
+        if not root_key in yaml_content:
+            print("Error: root key '" + root_key + "' not found in any yaml file")
+            exit(1)
+        template_context = yaml_content[root_key]
+    else:
+        template_context = yaml_content
+
+    return template_context
+
+
+def get_yaml_files(value, extension):
+    """ missing """
+    file_names = [derive_new_extension(item.strip(), extension) for item in value.split(',')]
+    return file_names
+
+def generate_content_from_extra_vars(parsed_args):
+    """ missing """
+    root = {}
+    child = {}
+    if not parsed_args.root_key == '':
+        root[parsed_args.root_key] = child
+    else:
+        child = root
+
+    for item in parsed_args.extra_vars:
+        i = item.find('=')
+        if i == -1:
+            key = item
+            value = ''
+        else:
+            key = item[0:i]
+            value = item[i+1:]
+
+        child[key] = value
+
+    return root
+
+def generate(data_path, template_file_list, parsed_args):
+    """ generate content """
+
+    template_handler = TemplateHandler(data_path)
+    template_handler.register_template_file_list(template_file_list)
+
+    extra_vars = generate_content_from_extra_vars(parsed_args)
+
+    global_yaml_database = YamlDatabase(data_path)
+
+    yaml_files = get_yaml_files(parsed_args.data_includes, parsed_args.extension)
+    global_yaml_database.assemble_content(yaml_files)
+    global_yaml_content = global_yaml_database.get_content()
+
+    yaml_content_list = []
+    for template_file in template_file_list:
+        template_context = assemble_template_context(data_path,
+                                                     template_file,
+                                                     global_yaml_content,
+                                                     parsed_args,
+                                                     extra_vars)
+        yaml_content_list.append(template_context)
+
+    result = template_handler.render(yaml_content_list)
+    return result
+
+def realdir(filename):
+    """ provide real path to parent directory of filename """
+    return dirname(realpath(filename))
+
+def derive_new_extension(filename, extension):
+    """ derive new name with specified extension from filename """
+    # if do not find a file extension,
+    # we simply add the extension to the file
+    index = filename.rfind('.')
+    if index == -1:
+        return filename + extension
+    yaml_name = filename[0:index] + extension
+    return yaml_name
+
+def write_content(filename, content):
+    """ Write content to file """
+    file_descriptor = open(filename, "w")
+    file_descriptor.write(content)
+    file_descriptor.flush()
+    file_descriptor.close()
+
+def main():
+    """ main """
+    parsed_args = parse_cmdline(basename(sys.argv[0]))
+    template_file_list = parsed_args.template
+    if not parsed_args.data_path is None:
+        data_path = parsed_args.data_path
+    else:
+        data_path = os.getcwd()
+
+    result = generate(data_path, template_file_list, parsed_args)
+    if not parsed_args.output_filename == '':
+        write_content(parsed_args.output_filename, result)
+    else:
+        print(result)
+
+if __name__ == '__main__':
+    main()

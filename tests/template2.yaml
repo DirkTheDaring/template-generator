@@ -1,0 +1,7 @@
+---
+tasks:
+  "to": "be ignored"
+
+vars:
+    mark: impression!
+    unique: value2

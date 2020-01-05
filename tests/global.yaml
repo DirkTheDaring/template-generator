@@ -1,0 +1,6 @@
+---
+tasks:
+  first:  "first"
+  second: "second"
+vars:
+  global:  This is a global value

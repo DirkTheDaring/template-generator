@@ -1,0 +1,12 @@
+---
+tasks:
+  mytasks: foobar
+
+vars:
+  first: 1
+  second: 2
+  list:
+  - [ 'a', 'b', 'c' ]
+  - [ 'b', 'c', 'd' ]
+  - [ 'c', 'd', 'e' ]
+  unique: value1
