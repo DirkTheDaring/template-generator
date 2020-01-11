@@ -87,22 +87,32 @@ def parse_cmdline(parser_name):
     parser.add_argument('--data-path', dest='data_path', help='path to data')
     parser.add_argument('--data-includes', dest='data_includes',
                         default="global,default", help='files which are included')
-    parser.add_argument('--root-key', dest='root_key',
-                        default='', help='root key in data files')
     parser.add_argument('--extension', dest='extension',
                         default='.yaml', help='extension for data files')
     parser.add_argument('-o', '--output', dest='output_filename',
                         default='', help='write output file')
     parser.add_argument('-e', '--extra-vars', dest='extra_vars',
                         default=[], action='append', help='extra variables')
+    parser.add_argument('--extra-vars-root-key', dest='extra_vars_root_key',
+                        default='', help='where to put the extra vars')
+
+
+    # Mutual exclusive
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument('--root-key', dest='root_key_list',
+                       default=[], action='append', help='root key in dat source files')
+    group.add_argument('--root-key-list', dest='root_key_csv_list',
+                       default="", help='root key in dat source files')
+
     parsed_args = parser.parse_args()
     return parsed_args
 
 
-def assemble_template_context(data_path, template_file, content_defaults, parsed_args, extra_vars):
+def assemble_template_context(data_path, template_file, content_defaults,
+                              parsed_args, root_key):
     """ assemble content """
-    root_key = parsed_args.root_key
     extension = parsed_args.extension
+    extra_vars = generate_content_from_extra_vars(parsed_args)
 
     file_list = []
     content = deepcopy(content_defaults)
@@ -111,7 +121,7 @@ def assemble_template_context(data_path, template_file, content_defaults, parsed
     yaml_name = derive_new_extension(template_file, extension)
     file_list.append(yaml_name)
     yaml_database.assemble_content(file_list)
-    # extra_vars are merged last, they are the "stronges" variables
+    # extra_vars are merged last, they are the "strongest" variables
     yaml_database.merge_dict(extra_vars)
     yaml_content = yaml_database.get_content()
     if not root_key == '':
@@ -126,18 +136,15 @@ def assemble_template_context(data_path, template_file, content_defaults, parsed
 
 
 def get_yaml_files(value, extension):
-    """ missing """
+    """ provide files names with given extension from a comma separted list """
     file_names = [derive_new_extension(item.strip(), extension) for item in value.split(',')]
     return file_names
 
-def generate_content_from_extra_vars(parsed_args):
+
+
+def generate_dict_from_extra_vars(parsed_args):
     """ missing """
-    root = {}
-    child = {}
-    if not parsed_args.root_key == '':
-        root[parsed_args.root_key] = child
-    else:
-        child = root
+    my_dict = {}
 
     for item in parsed_args.extra_vars:
         i = item.find('=')
@@ -148,17 +155,28 @@ def generate_content_from_extra_vars(parsed_args):
             key = item[0:i]
             value = item[i+1:]
 
-        child[key] = value
+        my_dict[key] = value
 
-    return root
+    return my_dict
 
-def generate(data_path, template_file_list, parsed_args):
+
+def generate_content_from_extra_vars(parsed_args):
+    """ missing """
+
+    if not parsed_args.extra_vars_root_key == '':
+        root = {}
+        root[parsed_args.extra_vars_root_key] = generate_dict_from_extra_vars(parsed_args)
+        return root
+
+    return generate_dict_from_extra_vars(parsed_args)
+
+
+def generate(data_path, parsed_args):
     """ generate content """
 
     template_handler = TemplateHandler(data_path)
-    template_handler.register_template_file_list(template_file_list)
+    template_handler.register_template_file_list(parsed_args.template)
 
-    extra_vars = generate_content_from_extra_vars(parsed_args)
 
     global_yaml_database = YamlDatabase(data_path)
 
@@ -166,14 +184,20 @@ def generate(data_path, template_file_list, parsed_args):
     global_yaml_database.assemble_content(yaml_files)
     global_yaml_content = global_yaml_database.get_content()
 
+    # where the root key is in the individual yaml files
+    root_key_list = resolve_key_list(parsed_args)
+
     yaml_content_list = []
-    for template_file in template_file_list:
+    i = 0
+    for template_file in parsed_args.template:
+        root_key = root_key_list[i]
         template_context = assemble_template_context(data_path,
                                                      template_file,
                                                      global_yaml_content,
                                                      parsed_args,
-                                                     extra_vars)
+                                                     root_key)
         yaml_content_list.append(template_context)
+        i = i + 1
 
     result = template_handler.render(yaml_content_list)
     return result
@@ -199,16 +223,42 @@ def write_content(filename, content):
     file_descriptor.flush()
     file_descriptor.close()
 
+def resolve_key_list(parsed_args):
+    """ missing """
+    if parsed_args.root_key_list:
+        # commandline has provided one or more --root-key arguments
+        root_key_list = parsed_args.root_key_list
+    else:
+        # commandline has provided one --root-key-list argument
+        root_key_list = parsed_args.root_key_csv_list.split(",")
+    number_of_root_keys = len(root_key_list)
+    number_of_templates = len(parsed_args.template)
+    if number_of_root_keys < number_of_templates:
+        # Special semenatic if we have one root_key we apply the key to all templates
+        if number_of_root_keys == 1:
+            root_key = root_key_list[0]
+            root_key_list = number_of_templates  * [root_key]
+        else:
+            size = number_of_templates - number_of_root_keys
+            root_key_list = root_key_list + size * ['']
+
+    return root_key_list
 def main():
     """ main """
     parsed_args = parse_cmdline(basename(sys.argv[0]))
-    template_file_list = parsed_args.template
+
     if not parsed_args.data_path is None:
         data_path = parsed_args.data_path
     else:
         data_path = os.getcwd()
 
-    result = generate(data_path, template_file_list, parsed_args)
+    for template_file in parsed_args.template:
+        file_path = os.path.join(data_path, template_file)
+        if not os.path.exists(file_path):
+            print("file does not exist: " + file_path)
+            exit(1)
+
+    result = generate(data_path, parsed_args)
     if not parsed_args.output_filename == '':
         write_content(parsed_args.output_filename, result)
     else:

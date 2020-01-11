@@ -5,3 +5,7 @@ tasks:
 vars:
     mark: impression!
     unique: value2
+
+othervars:
+    mark: otherimpression!
+    unique: othervalue2
