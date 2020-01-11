@@ -89,6 +89,10 @@ def parse_cmdline(parser_name):
                         default="global,default", help='files which are included')
     parser.add_argument('--extension', dest='extension',
                         default='.yaml', help='extension for data files')
+    
+    parser.add_argument('-i', '--input', dest='input_filename',
+                        default='', help='explicitly set input yaml file')
+
     parser.add_argument('-o', '--output', dest='output_filename',
                         default='', help='write output file')
     parser.add_argument('-e', '--extra-vars', dest='extra_vars',
@@ -118,7 +122,10 @@ def assemble_template_context(data_path, template_file, content_defaults,
     content = deepcopy(content_defaults)
 
     yaml_database = YamlDatabase(searchpath=data_path, content=content)
-    yaml_name = derive_new_extension(template_file, extension)
+    if parsed_args.input_filename:
+        yaml_name = parsed_args.input_filename
+    else:
+        yaml_name = derive_new_extension(template_file, extension)
     file_list.append(yaml_name)
     yaml_database.assemble_content(file_list)
     # extra_vars are merged last, they are the "strongest" variables
