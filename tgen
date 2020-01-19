@@ -18,34 +18,34 @@ class TemplateHandler:
             loader=self.template_loader,
             trim_blocks=True,
             lstrip_blocks=False)
-        self.template_file_list = []
 
-    def render(self, template_context_list):
+    def render(self, template_file_list, template_context_list):
         """ render registered template  """
-        if not len(template_context_list) == len(self.template_file_list):
-            print("length of template_context_list != file_list")
-            exit(1)
         output_text = ""
         i = 0
-        for template_file in self.template_file_list:
+        for template_file in template_file_list:
             template = self.template_env.get_template(template_file)
             template_context = template_context_list[i]
             output_text = output_text + template.render(template_context)
             i = i + 1
         return output_text
 
-    def register_template_file_list(self, file_list):
-        """ missing """
-        self.template_file_list = file_list
-
 class YamlDatabase:
     """ Assemble dict database from yaml files """
-    def __init__(self, searchpath, content=None):
+    def __init__(self, searchpath, content=None, override=None):
         self.searchpath = searchpath
         if content is None:
             self.content = {}
         else:
             self.content = content
+
+        if override is None:
+            self.override = {}
+        else:
+            self.override = override
+
+        self.template_env = jinja2.Environment(trim_blocks=True, lstrip_blocks=False)
+        self.merge_dict_recursive(self.content, self.override)
 
     def get_content(self):
         """ return content of yaml 'database'  """
@@ -57,12 +57,41 @@ class YamlDatabase:
             if isinstance(value, dict):
                 if key in config_target and isinstance(config_target[key], dict):
                     value = self.merge_dict_recursive(config_target[key], value)
+
             config_target[key] = value
         return config_target
 
+    def render_dict_values_recursive(self, context):
+        """ merge dictionary into target """
+        if not context:
+            return context
+        #print(context)
+
+        if isinstance(context, list):
+            new_list = []
+            for item in context:
+                new_list.append(self.render_dict_values_recursive(item))
+            return new_list
+
+        if isinstance(context, str):
+            value = self.template_env.from_string(context).render(self.content)
+            return value
+
+        if isinstance(context, bool):
+            return context
+
+        for key, value in context.items():
+            if isinstance(value, dict):
+                self.render_dict_values_recursive(value)
+            else:
+                context[key] = self.render_dict_values_recursive(value)
+
+        return context
+
     def merge_dict(self, config_source):
         """ merge dictionary into target """
-        self.merge_dict_recursive(self.content, config_source)
+        result = self.render_dict_values_recursive(config_source)
+        self.merge_dict_recursive(self.content, result)
 
     def assemble_content(self, file_list):
         """ load and join the content of yaml files """
@@ -70,15 +99,18 @@ class YamlDatabase:
             fullpath = os.path.join(self.searchpath, my_file)
             try:
                 file_descriptor = open(fullpath)
-                #print(fullpath)
                 tmp_content = yaml.safe_load(file_descriptor)
                 file_descriptor.close()
+
                 self.merge_dict(tmp_content)
+                # override all value, if something in override is set
+                self.merge_dict(self.override)
             except FileNotFoundError:
                 pass
             except yaml.YAMLError as exc:
                 print(exc)
                 exit(1)
+
 
 def parse_cmdline(parser_name):
     """ parse command line """
@@ -89,7 +121,7 @@ def parse_cmdline(parser_name):
                         default="global,default", help='files which are included')
     parser.add_argument('--extension', dest='extension',
                         default='.yaml', help='extension for data files')
-    
+
     parser.add_argument('-i', '--input', dest='input_filename',
                         default='', help='explicitly set input yaml file')
 
@@ -120,8 +152,8 @@ def assemble_template_context(data_path, template_file, content_defaults,
 
     file_list = []
     content = deepcopy(content_defaults)
+    yaml_database = YamlDatabase(searchpath=data_path, content=content, override=extra_vars)
 
-    yaml_database = YamlDatabase(searchpath=data_path, content=content)
     if parsed_args.input_filename:
         yaml_name = parsed_args.input_filename
     else:
@@ -129,8 +161,8 @@ def assemble_template_context(data_path, template_file, content_defaults,
     file_list.append(yaml_name)
     yaml_database.assemble_content(file_list)
     # extra_vars are merged last, they are the "strongest" variables
-    yaml_database.merge_dict(extra_vars)
     yaml_content = yaml_database.get_content()
+
     if not root_key == '':
         if not root_key in yaml_content:
             print("Error: root key '" + root_key + "' not found in any yaml file")
@@ -148,19 +180,29 @@ def get_yaml_files(value, extension):
     return file_names
 
 
-
-def generate_dict_from_extra_vars(parsed_args):
-    """ missing """
+# content of extra_vars e.g. [ 'a=1', 'b=2', 'c=sss' ]
+# but also special case like [ 'a=1', 'a=2', 'a=3'] which is turned into an array a:['1','2','3']
+def generate_dict_from_extra_vars(extra_vars):
+    """ parse extra_vars and return dictionary """
     my_dict = {}
 
-    for item in parsed_args.extra_vars:
+    for item in extra_vars:
         i = item.find('=')
         if i == -1:
             key = item
-            value = ''
+            value = ''        # default to empty value , not sure if this shouldn't be None
         else:
             key = item[0:i]
             value = item[i+1:]
+
+        # handle arrays
+        if key in my_dict:
+            tmp_value = my_dict[key]
+            if isinstance(tmp_value, list):
+                tmp_value.append(value)
+                value = tmp_value
+            else:
+                value = [tmp_value, value]
 
         my_dict[key] = value
 
@@ -172,24 +214,20 @@ def generate_content_from_extra_vars(parsed_args):
 
     if not parsed_args.extra_vars_root_key == '':
         root = {}
-        root[parsed_args.extra_vars_root_key] = generate_dict_from_extra_vars(parsed_args)
+        root[parsed_args.extra_vars_root_key] = generate_dict_from_extra_vars(parsed_args.extra_vars)
         return root
 
-    return generate_dict_from_extra_vars(parsed_args)
+    return generate_dict_from_extra_vars(parsed_args.extra_vars)
 
-
-def generate(data_path, parsed_args):
-    """ generate content """
-
-    template_handler = TemplateHandler(data_path)
-    template_handler.register_template_file_list(parsed_args.template)
-
-
-    global_yaml_database = YamlDatabase(data_path)
-
+def generate_context(data_path, parsed_args):
+    """ missing """
     yaml_files = get_yaml_files(parsed_args.data_includes, parsed_args.extension)
+    extra_vars = generate_content_from_extra_vars(parsed_args)
+
+    global_yaml_database = YamlDatabase(data_path, override=extra_vars)
     global_yaml_database.assemble_content(yaml_files)
     global_yaml_content = global_yaml_database.get_content()
+
 
     # where the root key is in the individual yaml files
     root_key_list = resolve_key_list(parsed_args)
@@ -206,7 +244,20 @@ def generate(data_path, parsed_args):
         yaml_content_list.append(template_context)
         i = i + 1
 
-    result = template_handler.render(yaml_content_list)
+    return yaml_content_list
+
+def generate_content(data_path, template_list, context_list):
+    """ missing """
+    template_handler = TemplateHandler(data_path)
+    result = template_handler.render(template_list, context_list)
+    return result
+
+
+def generate(data_path, parsed_args):
+    """ generate content """
+    context_list = generate_context(data_path, parsed_args)
+    template_list = parsed_args.template
+    result = generate_content(data_path, template_list, context_list)
     return result
 
 def realdir(filename):
