@@ -8,6 +8,7 @@ from copy import deepcopy
 #import logging
 import yaml
 import jinja2
+import datetime
 
 
 class TemplateHandler:
@@ -18,6 +19,9 @@ class TemplateHandler:
             loader=self.template_loader,
             trim_blocks=True,
             lstrip_blocks=False)
+        self.template_env.filters['to_yaml'] = to_yaml
+        self.template_env.filters['to_nice_yaml'] = to_nice_yaml
+        self.template_env.filters['datetimeformat'] = datetimeformat
 
     def render(self, template_file_list, template_context_list):
         """ render registered template  """
@@ -65,7 +69,6 @@ class YamlDatabase:
         """ merge dictionary into target """
         if not context:
             return context
-        #print(context)
 
         if isinstance(context, list):
             new_list = []
@@ -78,6 +81,13 @@ class YamlDatabase:
             return value
 
         if isinstance(context, bool):
+            return context
+
+        if isinstance(context, int):
+            return context
+
+        # if the value is in iso format yaml read it as date e.g. 2018-01-01
+        if isinstance(context, datetime.date):
             return context
 
         for key, value in context.items():
@@ -301,6 +311,26 @@ def resolve_key_list(parsed_args):
             root_key_list = root_key_list + size * ['']
 
     return root_key_list
+
+def to_yaml(a, *args, **kw):
+    """ to yaml filter analog to ansible """
+    default_flow_style = None
+    result = yaml.dump(a, allow_unicode=True, default_flow_style=default_flow_style, **kw)
+    return result
+
+def to_nice_yaml(a, indent=4, *args, **kw):
+    """ to to_nice_yaml filter analog to ansible """
+    result = yaml.dump(a, indent=indent, allow_unicode=True, default_flow_style=False, **kw)
+    return result
+
+def datetimeformat(value, format='%m %Y'):
+    if not value:
+      return ""
+    if not isinstance(value, datetime.date) or isinstance(value, datetime.datetime):
+       return value
+
+    return value.strftime(format)
+
 def main():
     """ main """
     parsed_args = parse_cmdline(basename(sys.argv[0]))
