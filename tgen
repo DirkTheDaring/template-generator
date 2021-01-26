@@ -19,9 +19,12 @@ class TemplateHandler:
             loader=self.template_loader,
             trim_blocks=True,
             lstrip_blocks=False)
+        # filters
         self.template_env.filters['to_yaml'] = to_yaml
         self.template_env.filters['to_nice_yaml'] = to_nice_yaml
         self.template_env.filters['datetimeformat'] = datetimeformat
+        # functions
+        self.template_env.globals['now'] = now
 
     def render(self, template_file_list, template_context_list):
         """ render registered template  """
@@ -330,6 +333,9 @@ def datetimeformat(value, format='%m %Y'):
        return value
 
     return value.strftime(format)
+
+def now(format='%Y'):
+    return datetime.datetime.now().strftime(format)
 
 def main():
     """ main """
